@@ -3,7 +3,6 @@ name: CI Runner Pipeline Auto
 on:
   workflow_dispatch:
   schedule:
-    # اجرای اتوماتیک هر ۵ ساعت یک‌بار
     - cron: '0 */5 * * *'
 
 jobs:
@@ -18,38 +17,51 @@ jobs:
       - name: Configure RDP User
         run: |
           $User = "rwa"
-          $Password = ConvertTo-SecureString "Pass123456789!" -AsPlainText -Force
-          New-LocalUser $User -Password $Password -FullName "RDP User" -Description "RDP Admin User"
-          Add-LocalGroupMember -Group "Administrators" -Member $User
-          Add-LocalGroupMember -Group "Remote Desktop Users" -Member $User
+          $Password = ConvertTo-SecureString "Q350607p@" -AsPlainText -Force
+
+          $existingUser = Get-LocalUser -Name $User -ErrorAction SilentlyContinue
+          if ($null -eq $existingUser) {
+            New-LocalUser -Name $User -Password $Password -FullName "RDP User" -Description "RDP Admin User"
+          } else {
+            Set-LocalUser -Name $User -Password $Password
+          }
+
+          Add-LocalGroupMember -Group "Administrators" -Member $User -ErrorAction SilentlyContinue
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member $User -ErrorAction SilentlyContinue
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0
           Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
 
       - name: Connect Mesh Network
         env:
           TS_KEY: ${{ secrets.TAILSCALE_AUTHKEY }}
         run: |
-          if ("$env:TS_KEY" -ne "") {
-            echo "Installing tailscale..."
-            choco install tailscale -y
+          if (-not [string]::IsNullOrWhiteSpace($env:TS_KEY)) {
+            Write-Output "Installing tailscale..."
+            choco install tailscale -y --no-progress
 
-            # Enable IP Routing in Registry
             Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters' -Name 'IPEnableRouter' -Value 1
-
-            # Enable & Start RemoteAccess / Routing Service
             Set-Service -Name RemoteAccess -StartupType Automatic
             Start-Service -Name RemoteAccess -ErrorAction SilentlyContinue
 
-            # Connect Tailscale with explicit hostname and exit-node flag
-            & "C:\Program Files\Tailscale\tailscale.exe" up --authkey="$env:TS_KEY" --hostname="github-runner" --advertise-exit-node --unattended
-            Start-Sleep -Seconds 10
+            Set-Service -Name Tailscale -StartupType Automatic -ErrorAction SilentlyContinue
+            Start-Service -Name Tailscale -ErrorAction SilentlyContinue
+            Start-Sleep -Seconds 8
+
+            $tsExe = "C:\Program Files\Tailscale\tailscale.exe"
+            if (Test-Path $tsExe) {
+              & $tsExe up --authkey="$env:TS_KEY" --hostname="github-runner" --advertise-exit-node --accept-routes --unattended
+              Start-Sleep -Seconds 5
+              & $tsExe debug prefs
+            } else {
+              Write-Output "Tailscale executable not found yet."
+            }
           } else {
-            echo "Tailscale key missing, skipping..."
+            Write-Output "Tailscale key missing, skipping..."
           }
 
       - name: Keep Alive Loop
         run: |
-          # ۲۹۰ دقیقه (۴ ساعت و ۵۰ دقیقه) برای جلوگیری از تداخل با کرون بعدی
           $timeout = 290
           $elapsed = 0
           while ($elapsed -lt $timeout) {
