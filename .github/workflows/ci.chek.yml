@@ -1,0 +1,46 @@
+name: CI Check
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-and-run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Setup Environment
+        run: |
+          sudo apt-get update
+          DEBIAN_FRONTEND=noninteractive sudo apt-get install -y xfce4 xfce4-goodies tightvncserver novnc websockify onboard
+
+          mkdir -p ~/.vnc
+          echo "123456" | vncpasswd -f > ~/.vnc/passwd
+          chmod 600 ~/.vnc/passwd
+
+          cat << 'EOF' > ~/.vnc/xstartup
+          #!/bin/bash
+          xrdb $HOME/.Xresources
+          startxfce4 &
+          onboard &
+          EOF
+          chmod +x ~/.vnc/xstartup
+
+          vncserver :1 -geometry 1280x720 -depth 24
+          websockify --web /usr/share/novnc/ 6080 localhost:5901 &
+
+      - name: Connect Network
+        env:
+          TS_KEY: ${{ secrets.TAILSCALE_AUTHKEY }}
+        run: |
+          curl -fsSL https://tailscale.com/install.sh | sh
+          sudo tailscale up --authkey "$TS_KEY" --hostname "github-runner-linux" --advertise-tags=tag:github-runner --advertise-exit-node --accept-routes
+          sleep 5
+
+      - name: Keep Alive Loop
+        run: |
+          timeout=290
+          elapsed=0
+          while [ $elapsed -lt $timeout ]; do
+            sleep 60
+            elapsed=$((elapsed + 1))
+          done
+          
